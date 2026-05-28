@@ -24,6 +24,82 @@ confirm() {
     [[ "$answer" =~ ^[Yy]$ ]]
 }
  
+# Interactive arrow-key selector. Prints items, lets user navigate with ↑/↓/j/k
+# and confirm with Enter. Sets SELECTED_INDEX to the chosen index or -1 on quit.
+# Usage: select_interactive "Title" items_array[@]
+SELECTED_INDEX=-1
+ 
+select_interactive() {
+    local title="$1"
+    shift
+    local items=("$@")
+    local count=${#items[@]}
+    local cur=0
+ 
+    # Hide cursor
+    tput civis 2>/dev/null || true
+ 
+    # Restore cursor on exit from this function
+    trap 'tput cnorm 2>/dev/null || true' RETURN
+ 
+    echo ""
+    echo -e "  ${BOLD}${title}${RESET}"
+    echo -e "  ${DIM}Use ↑/↓ to navigate, Enter to select, q to cancel${RESET}"
+    echo ""
+ 
+    # Draw initial list
+    for i in "${!items[@]}"; do
+        if (( i == cur )); then
+            echo -e "  ${CYAN}▸ ${items[$i]}${RESET}"
+        else
+            echo -e "    ${items[$i]}"
+        fi
+    done
+ 
+    while true; do
+        # Read a single keypress (raw mode)
+        IFS= read -rsn1 key
+ 
+        # Handle escape sequences (arrow keys)
+        if [[ "$key" == $'\x1b' ]]; then
+            read -rsn2 -t 0.1 rest || true
+            key+="$rest"
+        fi
+ 
+        case "$key" in
+            $'\x1b[A'|k)  # Up
+                (( cur > 0 )) && (( cur-- ))
+                ;;
+            $'\x1b[B'|j)  # Down
+                (( cur < count - 1 )) && (( cur++ ))
+                ;;
+            "")  # Enter
+                SELECTED_INDEX=$cur
+                # Move below the list
+                echo ""
+                return 0
+                ;;
+            q|Q)
+                SELECTED_INDEX=-1
+                echo ""
+                return 0
+                ;;
+            *) continue ;;
+        esac
+ 
+        # Redraw: move cursor up by $count lines and overwrite
+        tput cuu "$count" 2>/dev/null
+        for i in "${!items[@]}"; do
+            tput el 2>/dev/null  # Clear line
+            if (( i == cur )); then
+                echo -e "  ${CYAN}▸ ${items[$i]}${RESET}"
+            else
+                echo -e "    ${items[$i]}"
+            fi
+        done
+    done
+}
+ 
 # ─── Preflight Checks ──────────────────────────────────────────────────────────
 check_prerequisites() {
     command -v git >/dev/null 2>&1 || die "git is not installed"
@@ -244,31 +320,25 @@ do_retag() {
     local head_commit
     head_commit=$(git rev-parse --short HEAD)
  
-    echo ""
-    echo -e "  ${BOLD}Select a tag to move to current commit (${head_commit}):${RESET}"
-    echo ""
+    # Build display lines for the selector
+    local display_items=()
     for i in "${!candidates[@]}"; do
         local marker=""
         if [[ "${candidate_commits[$i]}" == "$head_commit" ]]; then
-            marker=" ${DIM}(already on HEAD)${RESET}"
+            marker="  (already on HEAD)"
         fi
-        echo -e "    ${BOLD}$((i + 1)))${RESET}  ${candidates[$i]}  ${DIM}(${candidate_dates[$i]} @ ${candidate_commits[$i]})${RESET}${marker}"
+        display_items+=("${candidates[$i]}  ${DIM}(${candidate_dates[$i]} @ ${candidate_commits[$i]})${RESET}${marker}")
     done
-    echo ""
-    echo -e "    ${DIM}q)  Cancel${RESET}"
-    echo ""
  
-    echo -en "  ${BOLD}▸ ${RESET}Enter choice: "
-    read -r pick
+    select_interactive "Select a tag to move to current commit (${head_commit}):" "${display_items[@]}"
  
-    [[ "$pick" == "q" || "$pick" == "Q" ]] && { info "Cancelled."; return 0; }
-    [[ "$pick" =~ ^[0-9]+$ ]] || die "Invalid choice."
+    if (( SELECTED_INDEX < 0 )); then
+        info "Cancelled."
+        return 0
+    fi
  
-    local idx=$((pick - 1))
-    (( idx >= 0 && idx < ${#candidates[@]} )) || die "Out of range."
- 
-    local selected_tag="${candidates[$idx]}"
-    local old_commit="${candidate_commits[$idx]}"
+    local selected_tag="${candidates[$SELECTED_INDEX]}"
+    local old_commit="${candidate_commits[$SELECTED_INDEX]}"
  
     if [[ "$old_commit" == "$head_commit" ]]; then
         warn "Tag ${selected_tag} already points to current commit. Nothing to do."
