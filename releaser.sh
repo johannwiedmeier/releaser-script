@@ -68,10 +68,10 @@ select_interactive() {
  
         case "$key" in
             $'\x1b[A'|k)  # Up
-                (( cur > 0 )) && (( cur-- ))
+                (( cur > 0 )) && (( cur-- )) || true
                 ;;
             $'\x1b[B'|j)  # Down
-                (( cur < count - 1 )) && (( cur++ ))
+                (( cur < count - 1 )) && (( cur++ )) || true
                 ;;
             "")  # Enter
                 SELECTED_INDEX=$cur
